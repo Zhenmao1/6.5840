@@ -1,9 +1,13 @@
 package kvraft
 
+import "log"
+
 const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
+	ErrTimeOut     = "ErrTimeOut"
+	ErrDulplicate  = "ErrDulplicate"
 )
 
 type Err string
@@ -16,6 +20,8 @@ type PutAppendArgs struct {
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	ClientId int64
+	SeqNum   int
 }
 
 type PutAppendReply struct {
@@ -23,11 +29,22 @@ type PutAppendReply struct {
 }
 
 type GetArgs struct {
-	Key string
+	Key      string
+	SeqNum   int
+	ClientId int64
 	// You'll have to add definitions here.
 }
 
 type GetReply struct {
 	Err   Err
 	Value string
+}
+
+const Debug = false
+
+func DPrintf(format string, a ...interface{}) (n int, err error) {
+	if Debug {
+		log.Printf(format, a...)
+	}
+	return
 }

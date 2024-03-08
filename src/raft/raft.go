@@ -23,8 +23,6 @@ import (
 	"sync"
 	"time"
 
-	//	"6.5840/labgob"
-
 	"6.5840/labrpc"
 )
 
@@ -59,7 +57,7 @@ type RequstSnapshotReply struct {
 }
 
 const (
-	commitInterval = time.Duration(100) * time.Millisecond
+	commitInterval = time.Duration(50) * time.Millisecond
 )
 
 type role int
@@ -89,8 +87,8 @@ type entry struct {
 	Term    int
 }
 
-const baseElectionTime = 300
-const baseheartBeatTime = 110
+const baseElectionTime = 600
+const baseheartBeatTime = 60
 
 // 实现单个Raft对等节点的Go对象。
 type Raft struct {

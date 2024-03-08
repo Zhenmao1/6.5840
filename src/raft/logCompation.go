@@ -56,6 +56,13 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	e.Encode(rf.includedTerm)
 	raftState := w.Bytes()
 	rf.persister.Save(raftState, snapshot)
+	/* DPrintf("6666节点%d先传回快照snapshot，再持久化状态和快照", rf.me)
+	applymsg := ApplyMsg{CommandValid: false, SnapshotValid: true,
+		Snapshot: snapshot, SnapshotIndex: index, SnapshotTerm: rf.curTerm}
+	go func() {
+		rf.applyCh <- applymsg
+	}() */
+
 	DPrintf("6666节点%d安装了snapshot%v之后，持久化状态和快照", rf.me, rf.persister.ReadRaftState())
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {

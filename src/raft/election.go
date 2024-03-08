@@ -13,7 +13,7 @@ func (rf *Raft) electionTimePast() bool {
 
 // 加锁
 func (rf *Raft) resetElectionTimeout() {
-	rf.electionTimeout = time.Duration(((rand.Int63() % (baseElectionTime / 3)) + baseElectionTime)) * time.Millisecond
+	rf.electionTimeout = time.Duration(((rand.Int63() % (baseElectionTime / 2)) + baseElectionTime)) * time.Millisecond
 	rf.electionTime = time.Now()
 	DPrintf("0000节点%d重置选举时间", rf.me)
 }
@@ -100,14 +100,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// 您的代码在这里（2A, 2B）。
 	//DPrintf("2222节点 %d 收到节点 %d 求票", rf.me, args.CandidateId)
 	//任期不符合要求
-	if args.Term < rf.curTerm {
+	if args.Term <= rf.curTerm {
 		reply.Term = rf.curTerm
 		reply.VoteGranted = false
 		DPrintf("2222请求节点 %d 的任期%d 小于当前节点%d的term%d,拒绝投票", args.CandidateId, args.Term, rf.me, rf.curTerm)
 		return
 	}
 	//任期大于等于发起者的term,先把自己的角色转变为follower,还原自身的状态
-	if rf.curTerm < args.Term {
+	if args.Term > rf.curTerm {
 		DPrintf("2222当前节点 %d 的任期%d 小于求票节点%d的term%d,转为follower,并持久化", rf.me, rf.curTerm, args.CandidateId, args.Term)
 		rf.voteFor = -1
 		rf.curTerm = args.Term

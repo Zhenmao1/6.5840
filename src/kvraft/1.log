@@ -1,0 +1,41 @@
+Test: InstallSnapshot RPC (3B) ...
+labgob warning: Decoding into a non-default variable/field NextIndex may not work
+  ... Passed --   6.1  3 11483   63
+Test: snapshot size is reasonable (3B) ...
+  ... Passed --  81.3  3 15280  800
+Test: ops complete fast enough (3B) ...
+--- FAIL: TestSpeed3B (101.30s)
+    test_test.go:426: Operations completed too slowly 100.438197ms/op > 33.333333ms/op
+测试: 崩溃重启, 快照, 一个客户端 (3B) ...
+迭代 0
+迭代 1
+迭代 2
+  ... Passed --  26.6  5 44281  150
+测试: 崩溃重启, 快照, 多个客户端 (3B) ...
+迭代 0
+迭代 1
+迭代 2
+  ... Passed --  32.6  5 245009  400
+测试: 不稳定网络, 快照, 多个客户端 (3B) ...
+迭代 0
+迭代 1
+迭代 2
+  ... Passed --  17.1  5  2361  264
+测试: 不稳定网络, 崩溃重启, 快照, 多个客户端 (3B) ...
+迭代 0
+迭代 1
+迭代 2
+  ... Passed --  24.2  5  3387  282
+测试: 不稳定网络, 崩溃重启, 分区, 快照, 多个客户端 (3B) ...
+迭代 0
+迭代 1
+迭代 2
+  ... Passed --  31.1  5  2637   94
+测试: 不稳定网络, 崩溃重启, 分区, 快照, 随机键, 多个客户端 (3B) ...
+迭代 0
+迭代 1
+迭代 2
+  ... Passed --  38.8  7  9193  211
+FAIL
+exit status 1
+FAIL	6.5840/kvraft	359.076s

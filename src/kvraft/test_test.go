@@ -1,16 +1,19 @@
 package kvraft
 
-import "6.5840/porcupine"
-import "6.5840/models"
-import "testing"
-import "strconv"
-import "time"
-import "math/rand"
-import "strings"
-import "sync"
-import "sync/atomic"
-import "fmt"
-import "io/ioutil"
+import (
+	"fmt"
+	"io/ioutil"
+	"math/rand"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"6.5840/models"
+	"6.5840/porcupine"
+)
 
 // The tester generously allows solutions to complete elections in one second
 // (much more than the paper's range of timeouts).
@@ -209,42 +212,50 @@ func partitioner(t *testing.T, cfg *config, ch chan bool, done *int32) {
 // maxraftstate is a positive number, the size of the state for Raft (i.e., log
 // size) shouldn't exceed 8*maxraftstate. If maxraftstate is negative,
 // snapshots shouldn't be used.
+// GenericTest 是一个通用的测试函数，用于测试不同的场景。
+// 它接受多个参数，包括测试对象、网络参数、客户端和服务器数量、网络是否不稳定、服务器是否会崩溃和重新启动、
+// 是否发生分区、最大 Raft 状态以及是否使用随机键。
 func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliable bool, crash bool, partitions bool, maxraftstate int, randomkeys bool) {
 
-	title := "Test: "
+	// 根据参数构建测试标题
+	title := "测试: "
 	if unreliable {
-		// the network drops RPC requests and replies.
-		title = title + "unreliable net, "
+		// 网络会丢弃 RPC 请求和回复。
+		title = title + "不稳定网络, "
 	}
 	if crash {
-		// peers re-start, and thus persistence must work.
-		title = title + "restarts, "
+		// 节点会重新启动，因此持久性必须正常工作。
+		title = title + "崩溃重启, "
 	}
 	if partitions {
-		// the network may partition
-		title = title + "partitions, "
+		// 网络可能会发生分区。
+		title = title + "分区, "
 	}
 	if maxraftstate != -1 {
-		title = title + "snapshots, "
+		title = title + "快照, "
 	}
 	if randomkeys {
-		title = title + "random keys, "
+		title = title + "随机键, "
 	}
 	if nclients > 1 {
-		title = title + "many clients"
+		title = title + "多个客户端"
 	} else {
-		title = title + "one client"
+		title = title + "一个客户端"
 	}
-	title = title + " (" + part + ")" // 3A or 3B
+	title = title + " (" + part + ")" // 3A 或 3B
 
+	// 创建配置并推迟清理
 	cfg := make_config(t, nservers, unreliable, maxraftstate)
 	defer cfg.cleanup()
 
+	// 开始测试并初始化操作日志
 	cfg.begin(title)
 	opLog := &OpLog{}
 
+	// 创建一个客户端
 	ck := cfg.makeClient(cfg.All())
 
+	// 初始化用于跟踪完成的变量
 	done_partitioner := int32(0)
 	done_clients := int32(0)
 	ch_partitioner := make(chan bool)
@@ -253,7 +264,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		clnts[i] = make(chan int)
 	}
 	for i := 0; i < 3; i++ {
-		// log.Printf("Iteration %v\n", i)
+		fmt.Printf("迭代 %v\n", i)
 		atomic.StoreInt32(&done_clients, 0)
 		atomic.StoreInt32(&done_partitioner, 0)
 		go spawn_clients_and_wait(t, cfg, nclients, func(cli int, myck *Clerk, t *testing.T) {
@@ -261,7 +272,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 			defer func() {
 				clnts[cli] <- j
 			}()
-			last := "" // only used when not randomkeys
+			last := "WWWW" // 仅在不使用随机键时使用
 			if !randomkeys {
 				Put(cfg, myck, strconv.Itoa(cli), last, opLog, cli)
 			}
@@ -281,68 +292,64 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 					}
 					j++
 				} else if randomkeys && (rand.Int()%1000) < 100 {
-					// we only do this when using random keys, because it would break the
-					// check done after Get() operations
+					// 仅在使用随机键时执行此操作，因为它会破坏 Get() 操作后的检查
 					Put(cfg, myck, key, nv, opLog, cli)
 					j++
 				} else {
 					// log.Printf("%d: client new get %v\n", cli, key)
 					v := Get(cfg, myck, key, opLog, cli)
-					// the following check only makes sense when we're not using random keys
+					// 当不使用随机键时，下面的检查才有意义
 					if !randomkeys && v != last {
-						t.Fatalf("get wrong value, key %v, wanted:\n%v\n, got\n%v\n", key, last, v)
+						t.Fatalf("获取错误的值，键 %v，期望值:\n%v\n，实际值:\n%v\n", key, last, v)
 					}
 				}
 			}
 		})
 
 		if partitions {
-			// Allow the clients to perform some operations without interruption
+			// 允许客户端执行一些操作而不受干扰
 			time.Sleep(1 * time.Second)
 			go partitioner(t, cfg, ch_partitioner, &done_partitioner)
 		}
 		time.Sleep(5 * time.Second)
 
-		atomic.StoreInt32(&done_clients, 1)     // tell clients to quit
-		atomic.StoreInt32(&done_partitioner, 1) // tell partitioner to quit
+		atomic.StoreInt32(&done_clients, 1)     // 告诉客户端退出
+		atomic.StoreInt32(&done_partitioner, 1) // 告诉分区器退出
 
 		if partitions {
-			// log.Printf("wait for partitioner\n")
+			// log.Printf("等待分区器\n")
 			<-ch_partitioner
-			// reconnect network and submit a request. A client may
-			// have submitted a request in a minority.  That request
-			// won't return until that server discovers a new term
-			// has started.
+			// 重新连接网络并提交请求。一个客户端可能已经在少数节点上提交了一个请求。
+			// 该请求直到该服务器发现新的任期已经开始才会返回。
 			cfg.ConnectAll()
-			// wait for a while so that we have a new term
+			// 等待一段时间，以便我们有一个新的任期
 			time.Sleep(electionTimeout)
 		}
 
 		if crash {
-			// log.Printf("shutdown servers\n")
+			// log.Printf("关闭服务器\n")
 			for i := 0; i < nservers; i++ {
 				cfg.ShutdownServer(i)
 			}
-			// Wait for a while for servers to shutdown, since
-			// shutdown isn't a real crash and isn't instantaneous
+			// 等待一段时间，以便服务器关闭，因为关闭不是真正的崩溃，不是瞬间发生的
 			time.Sleep(electionTimeout)
-			// log.Printf("restart servers\n")
-			// crash and re-start all
+			// log.Printf("重新启动服务器\n")
+			// 崩溃并重新启动所有服务器
 			for i := 0; i < nservers; i++ {
 				cfg.StartServer(i)
 			}
 			cfg.ConnectAll()
 		}
 
-		// log.Printf("wait for clients\n")
+		// log.Printf("等待客户端\n")
 		for i := 0; i < nclients; i++ {
-			// log.Printf("read from clients %d\n", i)
+			// log.Printf("从客户端 %d 读取\n", i)
 			j := <-clnts[i]
 			// if j < 10 {
-			// 	log.Printf("Warning: client %d managed to perform only %d put operations in 1 sec?\n", i, j)
+			// 	log.Printf("警告: 客户端 %d 在 1 秒内只能执行 %d 个 put 操作？\n", i, j)
 			// }
 			key := strconv.Itoa(i)
-			// log.Printf("Check %v for client %d\n", j, i)
+			// log.Printf("检查客户端 %d 的 %v\n", j, i)
 			v := Get(cfg, ck, key, opLog, 0)
 			if !randomkeys {
 				checkClntAppends(t, i, v, j)
@@ -350,38 +357,38 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		}
 
 		if maxraftstate > 0 {
-			// Check maximum after the servers have processed all client
-			// requests and had time to checkpoint.
+			// 在服务器处理所有客户端请求并有时间进行检查点之后检查最大状态
 			sz := cfg.LogSize()
 			if sz > 8*maxraftstate {
-				t.Fatalf("logs were not trimmed (%v > 8*%v)", sz, maxraftstate)
+				t.Fatalf("日志未修剪 (%v > 8*%v)", sz, maxraftstate)
 			}
 		}
 		if maxraftstate < 0 {
-			// Check that snapshots are not used
+			// 检查快照是否未使用
 			ssz := cfg.SnapshotSize()
 			if ssz > 0 {
-				t.Fatalf("snapshot too large (%v), should not be used when maxraftstate = %d", ssz, maxraftstate)
+				t.Fatalf("快照太大 (%v)，当 maxraftstate = %d 时不应使用", ssz, maxraftstate)
 			}
 		}
 	}
 
+	// 检查操作的线性可知性
 	res, info := porcupine.CheckOperationsVerbose(models.KvModel, opLog.Read(), linearizabilityCheckTimeout)
 	if res == porcupine.Illegal {
 		file, err := ioutil.TempFile("", "*.html")
 		if err != nil {
-			fmt.Printf("info: failed to create temp file for visualization")
+			fmt.Printf("信息: 无法为可视化创建临时文件")
 		} else {
 			err = porcupine.Visualize(models.KvModel, info, file)
 			if err != nil {
-				fmt.Printf("info: failed to write history visualization to %s\n", file.Name())
+				fmt.Printf("信息: 无法将历史可视化写入 %s\n", file.Name())
 			} else {
-				fmt.Printf("info: wrote history visualization to %s\n", file.Name())
+				fmt.Printf("信息: 已将历史可视化写入 %s\n", file.Name())
 			}
 		}
-		t.Fatal("history is not linearizable")
+		t.Fatal("历史不是线性可知的")
 	} else if res == porcupine.Unknown {
-		fmt.Println("info: linearizability check timed out, assuming history is ok")
+		fmt.Println("信息: 线性可知性检查超时，假设历史是正确的")
 	}
 
 	cfg.end()
@@ -597,7 +604,7 @@ func TestPersistPartitionUnreliableLinearizable3A(t *testing.T) {
 // even if minority doesn't respond.
 func TestSnapshotRPC3B(t *testing.T) {
 	const nservers = 3
-	maxraftstate := 1000
+	maxraftstate := 1000 //1000
 	cfg := make_config(t, nservers, false, maxraftstate)
 	defer cfg.cleanup()
 

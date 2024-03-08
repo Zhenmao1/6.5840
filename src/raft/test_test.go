@@ -838,6 +838,12 @@ func TestPersist32C(t *testing.T) {
 // alive servers isn't enough to form a majority, perhaps start a new server.
 // The leader in a new term may try to finish replicating log entries that
 // haven't been committed yet.
+// 测试扩展版Raft论文中图8所描述的场景。每次迭代请求一个领导者（如果存在的话）在Raft日志中插入一个命令。
+//如果有领导者，该领导者将以很高的概率快速失败（可能在命令提交之前），
+//或者在一段时间后以较低的概率崩溃（最有可能在命令已提交后）。
+//如果存活的服务器数量不足以形成多数，则可能启动一个新服务器。
+//新任期的领导者可能会尝试完成尚未提交的日志条目的复制。
+
 func TestFigure82C(t *testing.T) {
 	servers := 5
 	cfg := make_config(t, servers, false, false)
@@ -852,7 +858,7 @@ func TestFigure82C(t *testing.T) {
 		leader := -1
 		for i := 0; i < servers; i++ {
 			if cfg.rafts[i] != nil {
-				_, _, ok := cfg.rafts[i].Start(rand.Int())
+				_, _, ok := cfg.rafts[i].Start(rand.Int() % 101)
 				if ok {
 					leader = i
 				}
@@ -889,7 +895,7 @@ func TestFigure82C(t *testing.T) {
 		}
 	}
 
-	cfg.one(rand.Int(), servers, true)
+	cfg.one(rand.Int()%101, servers, true)
 
 	cfg.end()
 }

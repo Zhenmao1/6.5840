@@ -9,7 +9,7 @@ import (
 )
 
 // Debugging
-const Debug = true
+const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -34,10 +34,14 @@ func (rf *Raft) getLastTerm() int {
 
 // 加锁使用，获得有快照的某条日志
 func (rf *Raft) getSnapedLogTerm(index int) int {
+	//假设过期leader重连的瞬间被服务器捕获并且发送的previndex已经被压缩，此时仍然返回压缩前的内容，表明自己更新，拒绝他添加
 	if index == rf.includedIndex {
 		return rf.includedTerm
 	} else if index > len(rf.logs)+rf.includedIndex {
 		DPrintf("要获取的日志index%d不合理，目前最长的index%d", index, len(rf.logs)+rf.includedIndex)
+		return -1
+	} else if index < rf.includedIndex {
+		DPrintf("要获取的日志index%d不合理，目前最短的index%d", index, rf.includedIndex)
 		return -1
 	} else {
 		return rf.logs[index-rf.includedIndex-1].Term
@@ -156,4 +160,9 @@ func (rf *Raft) readPersist(data []byte) {
 		DPrintf("节点%d重新加载lastapply%d和commitindex%d term%d log%v", rf.me, rf.lastApplied, rf.commitIndex, rf.curTerm, rf.logs)
 		copy(rf.logs, logs)
 	}
+}
+func (rf *Raft) RaftStateSize() int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return len(rf.persister.raftstate)
 }

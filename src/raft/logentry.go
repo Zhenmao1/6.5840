@@ -36,8 +36,8 @@ func (rf *Raft) ConstructAppendArgs(server int) (*AppendEntryArgs, *AppendEntryR
 }
 func (rf *Raft) Heartbeat() {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	rf.resetHeartTime()
+	rf.mu.Unlock()
 	for i := 0; i < len(rf.peers); i++ {
 		if rf.killed() {
 			return
@@ -46,7 +46,14 @@ func (rf *Raft) Heartbeat() {
 			go func(server int) {
 				//在发送日志或者心跳之前，可能会先发起快照
 				//构造请求参数
-				if rf.nextIndex[server]-1 < rf.includedIndex {
+				rf.mu.Lock()
+				next := rf.nextIndex[server] - 1
+				role := rf.role
+				rf.mu.Unlock()
+				if role != leader {
+					return
+				}
+				if next < rf.includedIndex {
 					rf.RequestInstallSnapshot(server)
 					return
 				}
@@ -241,15 +248,10 @@ func (rf *Raft) checkCommit() {
 		if rf.lastApplied < rf.commitIndex {
 			msg := ApplyMsg{CommandValid: true, Command: rf.logs[rf.lastApplied-rf.includedIndex].Command, CommandIndex: rf.lastApplied + 1}
 			DPrintf("5555节点 %d 开始提交%v", rf.me, msg)
-			rf.mu.Unlock()
-
-			rf.applyCh <- msg
-
-			rf.mu.Lock()
 			rf.lastApplied++
-			DPrintf("5555节点 %d lastApplied%v", rf.me, rf.lastApplied)
 			rf.mu.Unlock()
-
+			rf.applyCh <- msg
+			DPrintf("5555节点 %d lastApplied%v", rf.me, rf.lastApplied)
 		} else {
 			rf.mu.Unlock()
 		}
