@@ -4,14 +4,25 @@ package shardctrler
 // Shardctrler clerk.
 //
 
-import "6.5840/labrpc"
-import "time"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	"math/big"
+	"sync"
+	"time"
+
+	"6.5840/labrpc"
+)
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// Your data here.
+	clientId int64
+	seqNum   int
+	mu       sync.Mutex
+}
+type CommandResponse struct {
+	Err    Err
+	Config Config
 }
 
 func nrand() int64 {
@@ -25,19 +36,29 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// Your code here.
+	ck.clientId = nrand()
+	ck.seqNum = 1
+
 	return ck
 }
 
 func (ck *Clerk) Query(num int) Config {
 	args := &QueryArgs{}
+
+	ck.mu.Lock()
 	// Your code here.
 	args.Num = num
+	args.ClientId = ck.clientId
+	args.SeqNum = ck.seqNum
+	ck.mu.Unlock()
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
+		for index, srv := range ck.servers {
 			var reply QueryReply
+			DPrintf("****客户端 %v 对 sc 服务器 %d 发起第%d指令 Query 指令信息：%v", args.ClientId, index, args.SeqNum, args)
 			ok := srv.Call("ShardCtrler.Query", args, &reply)
-			if ok && reply.WrongLeader == false {
+			if ok && reply.Err != ErrWrongLeader {
+				ck.seqNum++
 				return reply.Config
 			}
 		}
@@ -48,14 +69,19 @@ func (ck *Clerk) Query(num int) Config {
 func (ck *Clerk) Join(servers map[int][]string) {
 	args := &JoinArgs{}
 	// Your code here.
+	ck.mu.Lock()
 	args.Servers = servers
-
+	args.ClientId = ck.clientId
+	args.SeqNum = ck.seqNum
+	ck.mu.Unlock()
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
+		for index, srv := range ck.servers {
 			var reply JoinReply
+			DPrintf("****客户端 %v 对 sc 服务器 %d 发起第%d指令 Join 指令信息：%v", args.ClientId, index, args.SeqNum, args)
 			ok := srv.Call("ShardCtrler.Join", args, &reply)
-			if ok && reply.WrongLeader == false {
+			if ok && reply.Err != ErrWrongLeader {
+				ck.seqNum++
 				return
 			}
 		}
@@ -65,15 +91,20 @@ func (ck *Clerk) Join(servers map[int][]string) {
 
 func (ck *Clerk) Leave(gids []int) {
 	args := &LeaveArgs{}
-	// Your code here.
+	// Your code here
+	ck.mu.Lock()
 	args.GIDs = gids
-
+	args.ClientId = ck.clientId
+	args.SeqNum = ck.seqNum
+	ck.mu.Unlock()
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
+		for index, srv := range ck.servers {
 			var reply LeaveReply
+			DPrintf("****客户端 %v 对 sc 服务器 %d 发起第%d指令 Leave 指令信息：%v", args.ClientId, index, args.SeqNum, args)
 			ok := srv.Call("ShardCtrler.Leave", args, &reply)
-			if ok && reply.WrongLeader == false {
+			if ok && reply.Err != ErrWrongLeader {
+				ck.seqNum++
 				return
 			}
 		}
@@ -84,15 +115,20 @@ func (ck *Clerk) Leave(gids []int) {
 func (ck *Clerk) Move(shard int, gid int) {
 	args := &MoveArgs{}
 	// Your code here.
+	ck.mu.Lock()
 	args.Shard = shard
 	args.GID = gid
-
+	args.ClientId = ck.clientId
+	args.SeqNum = ck.seqNum
+	ck.mu.Unlock()
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
+		for index, srv := range ck.servers {
 			var reply MoveReply
+			DPrintf("****客户端 %v 对 sc 服务器 %d 发起第%d指令 Move 指令信息：%v", args.ClientId, index, args.SeqNum, args)
 			ok := srv.Call("ShardCtrler.Move", args, &reply)
-			if ok && reply.WrongLeader == false {
+			if ok && reply.Err != ErrWrongLeader {
+				ck.seqNum++
 				return
 			}
 		}

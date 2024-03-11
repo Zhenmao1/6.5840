@@ -102,8 +102,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
-	// Your code here.
+
 	if kv.killed() {
 		reply.Err = ErrWrongLeader
 		return
@@ -142,6 +141,12 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			reply.Err = ErrWrongLeader
 			return
 		}
+		kv.mu.Lock()
+		if ch, ok := kv.waitApplyCh[replyOp.Index]; ok {
+			close(ch)
+			delete(kv.waitApplyCh, replyOp.Index)
+		}
+		kv.mu.Unlock()
 		reply.Err = OK
 		DPrintf("kvserver%v成功添加 key%s value%s 返回参数%v", kv.me, replyOp.Key, replyOp.Value, reply)
 		return
@@ -192,7 +197,7 @@ func (kv *KVServer) snapshotHandler(applyMsg raft.ApplyMsg) {
 
 // 加锁使用
 func (kv *KVServer) isNeedSnapShot(applyMsg raft.ApplyMsg) {
-	if kv.rf.RaftStateSize() >= kv.maxraftstate {
+	if kv.rf.RaftStateSize() >= kv.maxraftstate && kv.maxraftstate != -1 {
 		snapshot := kv.snapShotEncode()
 		DPrintf("kvserver%v 日志长度超过限定长度%d,开始日志压缩%v", kv.me, kv.maxraftstate, snapshot)
 		kv.rf.Snapshot(applyMsg.CommandIndex, snapshot)
