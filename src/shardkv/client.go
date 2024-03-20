@@ -38,6 +38,7 @@ type Clerk struct {
 
 	seqNum   int
 	clientId int64
+	leaderId int
 }
 
 // 创建一个新的Clerk
@@ -51,6 +52,7 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 
 	ck.clientId = nrand()
 	ck.seqNum = 1
+	ck.leaderId = 0
 	return ck
 }
 
@@ -59,26 +61,31 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 // 面对所有其他错误时，将永远重试。
 func (ck *Clerk) Get(key string) string {
 
-	args := GetArgs{}
-	args.Key = key
-	args.SeqNum = ck.seqNum
-	args.ClientId = ck.clientId
-
 	for {
+		args := GetArgs{}
+		args.Key = key
+		args.SeqNum = ck.seqNum
+		args.ClientId = ck.clientId
+		leaderId := ck.leaderId
 		shard := key2shard(key)        // 根据键计算它所在的分片
 		gid := ck.config.Shards[shard] // 根据分片找到负责该分片的组
 		if servers, ok := ck.config.Groups[gid]; ok {
 			// 尝试查询分片所在组的每个服务器
 			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[si])
+				srv := ck.make_end(servers[(si+leaderId)%len(servers)])
 				var reply GetReply
 				DPrintf("####客户端 %v 对 kv 服务器 %s 发起第%d指令 GET 指令信息：%v", args.ClientId, servers[si], args.SeqNum, args)
 				ok := srv.Call("ShardKV.Get", &args, &reply)
+				if !ok {
+					DPrintf("####客户端 %v 对 kv 服务器 %s 发起第%d指令 get 指令Call失败%v", args.ClientId, servers[si], args.SeqNum, reply)
+				}
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
 					ck.seqNum++
+					ck.leaderId = (si + leaderId) % len(servers)
 					return reply.Value
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
+					//DPrintf("分组错误\n")
 					break
 				}
 				// 如果不成功，或者错误为ErrWrongLeader，继续尝试其他服务器
@@ -86,34 +93,41 @@ func (ck *Clerk) Get(key string) string {
 		}
 		time.Sleep(100 * time.Millisecond) // 在重试前稍作等待
 		ck.config = ck.sm.Query(-1)        // 从控制器查询最新配置
-		DPrintf("####客户端 %v 对 ctrller 服务器 发起query 指令config%v", args.ClientId, ck.config)
+		DPrintf("####客户端 %v 对 ctrller 服务器 发起query 指令config编号%v", args.ClientId, ck.config.Num)
 	}
 	return ""
 }
 
 // Put和Append共用的函数。
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	args := PutAppendArgs{}
-	args.Key = key
-	args.Value = value
-	args.Op = op
-	args.SeqNum = ck.seqNum
-	args.ClientId = ck.clientId
+
 	for {
+		args := PutAppendArgs{}
+		args.Key = key
+		args.Value = value
+		args.Op = op
+		args.SeqNum = ck.seqNum
+		args.ClientId = ck.clientId
+		leaderId := ck.leaderId
 		shard := key2shard(key)        // 计算键所在的分片
 		gid := ck.config.Shards[shard] // 找到负责该分片的组
 		if servers, ok := ck.config.Groups[gid]; ok {
 			// 尝试向负责的组的每个服务器发送Put或Append请求
 			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[si])
+				srv := ck.make_end(servers[(si+leaderId)%len(servers)])
 				var reply PutAppendReply
 				DPrintf("####客户端 %v 对 kv 服务器 %s 发起第%d指令 Put/Append 指令信息：%v", args.ClientId, servers[si], args.SeqNum, args)
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
+				if !ok {
+					DPrintf("####客户端 %v 对 kv 服务器 %s 发起第%d指令 Put/Append 指令Call失败%v", args.ClientId, servers[si], args.SeqNum, args)
+				}
 				if ok && reply.Err == OK {
 					ck.seqNum++
+					ck.leaderId = (si + leaderId) % len(servers)
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {
+					//DPrintf("分组错误\n")
 					break
 				}
 				// 如果不成功，或者错误为ErrWrongLeader，或者时间超过，继续尝试其他服务器
@@ -125,7 +139,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 		time.Sleep(100 * time.Millisecond) // 在重试前稍作等待
 		ck.config = ck.sm.Query(-1)        // 从控制器查询最新配置
-		DPrintf("####客户端 %v 对 ctrller 服务器 发起query 指令config%v", args.ClientId, ck.config)
+		DPrintf("####客户端 %v 对 ctrller 服务器 发起query 指令config编号%v", args.ClientId, ck.config.Num)
 	}
 }
 

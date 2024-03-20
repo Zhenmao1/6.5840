@@ -8,16 +8,41 @@ import "6.5840/shardctrler"
 // Shardctrler may change shard assignment from time to time.
 //
 // You will have to modify these definitions.
-const configTime = 80
+const configTime = 50
+const checkShardMovingTime = 100
 const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongGroup  = "ErrWrongGroup"
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrTimeOut     = "ErrTimeOut"
+	ErrWaitShard   = "ErrWaitShard"
+	ErrConfigNum   = "ErrConfigNum"
+	ErrDulplicate  = "ErrDulplicate"
 )
 
 type Err string
+
+const (
+	Servering = "Servering"
+	Pulling   = "Pulling"
+	Pushing   = "Pushing"
+	NotFind   = "NotFind"
+	Waitting  = "Waitting"
+)
+
+type Status string
+
+const (
+	Put       = "Put"
+	Get       = "Get"
+	Append    = "Append"
+	Config    = "Config"
+	AddShard  = "AddShard"
+	MoveShard = "MoveShard"
+)
+
+type Type string
 
 // Put or Append
 type PutAppendArgs struct {
@@ -50,5 +75,17 @@ type GetReply struct {
 
 type Shard struct {
 	DataBase map[string]string
-	Config   shardctrler.Config
+	//Config   shardctrler.Config
+}
+
+type RequestShardsArgs struct {
+	Config       shardctrler.Config
+	ShardIndexes int
+	ClientId     int
+	SeqNum       int
+}
+
+type RequestShardsReply struct {
+	Data Shard
+	Err  Err
 }

@@ -18,12 +18,16 @@ import (
 // 注意字段名必须以大写字母开头，否则RPC调用时无法正常序列化/反序列化。
 type Op struct {
 	// 你的定义在这里。
-	Option   string
-	ClientId int64
-	SeqNum   int
-	Key      string
-	Value    string
-	Index    int
+	Option       Type
+	ClientId     int64
+	SeqNum       int
+	Key          string
+	Value        string
+	Index        int
+	Config       shardctrler.Config
+	Data         Shard
+	ShardIndexes int
+	Err          Err
 }
 
 // ShardKV 结构体代表了一个分片的键值存储服务实例。
@@ -36,17 +40,23 @@ type ShardKV struct {
 	gid          int                            // 当前分片组的组ID（GID）
 	ctrlers      []*labrpc.ClientEnd            // 分片控制器的RPC端点列表
 	maxraftstate int                            // 日志达到多大时进行快照，以节省空间（如果为-1，则不进行快照）
+	configMu     sync.Mutex                     //用来保护configMu和currentConfig以及shardStatus
 
 	// 你的定义在这里。
-	lastConfig    shardctrler.Config
+	//askShard      []bool
 	currentConfig shardctrler.Config
+	lastConfig    shardctrler.Config
 	waitApplyCh   map[int]chan Op
 	completed     map[int64]int
 	dead          int32
 	shards        []Shard
 	sm            *shardctrler.Clerk
+	shardStatus   []Status
+	includeIndex  int
 
-	includeIndex int
+	//防止shard过程的日志暴增
+	seqNum int
+	//不设置clientID去重，gid*10+me一定不会重复
 }
 
 // Get 方法处理客户端的Get请求。
@@ -58,10 +68,19 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	}
 	shardId := key2shard(args.Key)
 	//当前要访问的shard不属于自己
+
+	//DPrintf("kvserver%v 收到client%v 第Seq%v条指令,key%s向下传递给raft", kv.me, args.ClientId, args.SeqNum, args.Key)
 	kv.mu.Lock()
 	if kv.currentConfig.Shards[shardId] != kv.gid {
 		reply.Err = ErrWrongGroup
-		DPrintf("kvserver%v 收到client%v 第Seq%v条指令,但key不属于这个group", kv.me, args.ClientId, args.SeqNum)
+		DPrintf("kvserver%v %v 收到client%v 第Seq%v条指令,但key%s不属于这个group", kv.gid, kv.me, args.ClientId, args.SeqNum, args.Key)
+		kv.mu.Unlock()
+		return
+	}
+	if kv.shardStatus[shardId] == Pulling || kv.shardStatus[shardId] == Pushing || kv.shardStatus[shardId] == Waitting {
+		reply.Err = ErrWaitShard
+		DPrintf("kvserver%v %v 收到client%v 第Seq%v条指令,但shard%d处于迁移过程%s", kv.gid, kv.me, args.ClientId, args.SeqNum, shardId, kv.shardStatus[shardId])
+		kv.mu.Unlock()
 		return
 	}
 	kv.mu.Unlock()
@@ -71,9 +90,9 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	DPrintf("kvserver%v 收到client%v 第Seq%v条指令,key%s向下传递给raft", kv.me, args.ClientId, args.SeqNum, args.Key)
+	DPrintf("kvserver%v %v 收到client%v 第Seq%v条指令,key%s向下传递给raft", kv.gid, kv.me, args.ClientId, args.SeqNum, args.Key)
 	cmd := Op{
-		Option:   "Get",
+		Option:   Get,
 		Key:      args.Key,
 		ClientId: args.ClientId,
 		SeqNum:   args.SeqNum,
@@ -87,7 +106,9 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		//正确收到goruntine的通知，可以应用到状态机了，之后返回
 		//第一步先关闭通道
 		if cmd.ClientId != replyOp.ClientId || cmd.SeqNum != replyOp.SeqNum {
-			DPrintf("kvserver%v 向raft发出的op%v，没有正确的返回%v", kv.me, cmd, replyOp)
+			if Isleader {
+				DPrintf("kvserver%v 向raft发出的op%v，没有正确的返回%v", kv.me, cmd, replyOp)
+			}
 			reply.Err = ErrWrongLeader
 			return
 		}
@@ -98,7 +119,12 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		}
 		reply.Err = OK
 		reply.Value = replyOp.Value
-		DPrintf("kvserver%v get正确执行，返回参数%s", kv.me, reply.Value)
+		if replyOp.Err == ErrWrongGroup {
+			reply.Err = ErrWrongGroup
+		}
+		if Isleader {
+			DPrintf("kvserver%v %v get正确执行，返回参数%s", kv.gid, kv.me, reply.Value)
+		}
 		kv.mu.Unlock()
 		return
 	case <-time.After(time.Duration(time.Millisecond * 5000)):
@@ -119,7 +145,14 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
 	if kv.currentConfig.Shards[shardId] != kv.gid {
 		reply.Err = ErrWrongGroup
-		DPrintf("kvserver%v 收到client%v 第Seq%v条指令,但key不属于这个group", kv.me, args.ClientId, args.SeqNum)
+		DPrintf("kvserver%v %v 收到client%v 第Seq%v条指令,但key不属于这个group", kv.gid, kv.me, args.ClientId, args.SeqNum)
+		kv.mu.Unlock()
+		return
+	}
+	if kv.shardStatus[shardId] == Pulling || kv.shardStatus[shardId] == Pushing || kv.shardStatus[shardId] == Waitting {
+		reply.Err = ErrWaitShard
+		DPrintf("kvserver%v 收到client%v 第Seq%v条指令,但shard%d处于迁移过程%s", kv.me, args.ClientId, args.SeqNum, shardId, kv.shardStatus[shardId])
+		kv.mu.Unlock()
 		return
 	}
 	kv.mu.Unlock()
@@ -130,14 +163,18 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	DPrintf("kvserver%v 收到client%v 第Seq%v条指令,key%s,value%s向下传递给raft", kv.me, args.ClientId, args.SeqNum, args.Key, args.Value)
+	DPrintf("kvserver%v %v 收到client%v 第Seq%v条指令,key%s,value%s向下传递给raft", kv.gid, kv.me, args.ClientId, args.SeqNum, args.Key, args.Value)
 
 	cmd := Op{
-		Option:   args.Op,
 		Key:      args.Key,
 		Value:    args.Value,
 		ClientId: args.ClientId,
 		SeqNum:   args.SeqNum,
+	}
+	if args.Op == "Put" {
+		cmd.Option = Put
+	} else {
+		cmd.Option = Append
 	}
 	lastAppliedIndex, _, _ := kv.rf.Start(cmd)
 	//应该在他提交之后再创建chan，不然此处宕掉，会产生一条莫名的chan
@@ -147,7 +184,9 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		//正确收到goruntine的通知，可以应用到状态机了，之后返回
 		//第一步先关闭通道
 		if cmd.ClientId != replyOp.ClientId || cmd.SeqNum != replyOp.SeqNum {
-			DPrintf("kvserver%v 向raft发出的op%v，没有正确的返回%v", kv.me, cmd, replyOp)
+			if Isleader {
+				DPrintf("kvserver%v %v向raft发出的op%v，没有正确的返回%v", kv.gid, kv.me, cmd, replyOp)
+			}
 			reply.Err = ErrWrongLeader
 			return
 		}
@@ -158,7 +197,12 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 		kv.mu.Unlock()
 		reply.Err = OK
-		DPrintf("kvserver%v成功添加 key%s value%s 返回参数%v", kv.me, replyOp.Key, replyOp.Value, reply)
+		if replyOp.Err == ErrWrongGroup {
+			reply.Err = ErrWrongGroup
+		}
+		if Isleader {
+			DPrintf("kvserver%v %v成功PUT/APPEND key%s value%s 返回参数%v", kv.gid, kv.me, replyOp.Key, replyOp.Value, reply)
+		}
 		return
 	case <-time.After(time.Duration(time.Millisecond * 5000)):
 		DPrintf("kvserver%d定时器时间到", kv.me)
@@ -173,7 +217,9 @@ func (kv *ShardKV) CatchApplyOp() {
 			return
 		}
 		applyMsg := <-kv.applyCh
-		DPrintf("kvserver节点%v 从applyCH 收到index%v cmd%v", kv.me, applyMsg.CommandIndex, applyMsg)
+		if _, Isleader := kv.rf.GetState(); Isleader {
+			DPrintf("kvserver%v %v 从applyCH 收到index%v cmd%v", kv.gid, kv.me, applyMsg.CommandIndex, applyMsg)
+		}
 		if applyMsg.CommandValid {
 			kv.commandHandler(applyMsg)
 		}
@@ -191,31 +237,59 @@ func (kv *ShardKV) commandHandler(applyMsg raft.ApplyMsg) {
 	//所有的kvserver都会拿到op，但只有leader需要返回处理，其余只用应用到状态机
 	shardId := key2shard(op.Key)
 	switch op.Option {
-	case "Get":
+	case Get:
 		if kv.completed[op.ClientId] < op.SeqNum {
-			DPrintf("database%v", kv.shards[shardId].DataBase)
+			//DPrintf("database%v", kv.shards[shardId].DataBase)
+			if kv.shardStatus[shardId] == Servering {
+				op.Value = kv.shards[shardId].DataBase[op.Key]
+			} else {
+				op.Err = ErrWrongGroup
+				DPrintf("database%v,要应用到shard发现shard转移，返回给上层get错误，重新发起命令", kv.shards[shardId].DataBase)
+			}
+		}
+		op.Value = kv.shards[shardId].DataBase[op.Key]
+		kv.completed[op.ClientId] = op.SeqNum
+	case Put:
+		if kv.completed[op.ClientId] < op.SeqNum {
+			//DPrintf("database%v", kv.shards[shardId].DataBase)
+			if kv.shardStatus[shardId] == Servering {
+				kv.shards[shardId].DataBase[op.Key] = op.Value
+			} else {
+				op.Err = ErrWrongGroup
+				DPrintf("database%v,要应用到shard发现shard转移，返回给上层put错误，重新发起命令", kv.shards[shardId].DataBase)
+			}
+
+		}
+		op.Value = kv.shards[shardId].DataBase[op.Key]
+		kv.completed[op.ClientId] = op.SeqNum
+	case Append:
+		if kv.completed[op.ClientId] < op.SeqNum {
+			//DPrintf("database%v", kv.shards[shardId].DataBase)
+			if kv.shardStatus[shardId] == Servering {
+				kv.shards[shardId].DataBase[op.Key] += op.Value
+			} else {
+				op.Err = ErrWrongGroup
+				DPrintf("database%v,要应用到shard发现shard转移，返回给上层append错误，重新发起命令", kv.shards[shardId].DataBase)
+			}
 			op.Value = kv.shards[shardId].DataBase[op.Key]
 		}
-	case "Put":
-		if kv.completed[op.ClientId] < op.SeqNum {
-			DPrintf("database%v", kv.shards[shardId].DataBase)
-			kv.shards[shardId].DataBase[op.Key] = op.Value
-		}
-	case "Append":
-		if kv.completed[op.ClientId] < op.SeqNum {
-			DPrintf("database%v", kv.shards[shardId].DataBase)
-			kv.shards[shardId].DataBase[op.Key] += op.Value
-		}
+		kv.completed[op.ClientId] = op.SeqNum
+	case Config:
+		//这里的seq已经借用了config的编号了
+		kv.configHandller(op)
+	case AddShard:
+		kv.addShardHandller(op)
+	case MoveShard:
+		kv.moveShardHandller(op)
 	}
-	kv.completed[op.ClientId] = op.SeqNum
-	//检查是否是leader
+	//检查是否是leader,是的话要应用到状态机
 	if _, isLeader := kv.rf.GetState(); isLeader {
 		kv.isNeedSnapShot(applyMsg)
 		waitCh, ok := kv.waitApplyCh[applyMsg.CommandIndex]
 		if ok {
 			waitCh <- op
 		} else {
-			DPrintf("kvserver%d检测到raft发出的applymsg，但是返回的通道关闭了%v", kv.me, op)
+			DPrintf("kvserver%v %v检测到raft发出的applymsg，但是返回的通道关闭了%v", kv.gid, kv.me, op)
 		}
 	}
 
@@ -256,12 +330,15 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.includeIndex = 0
 	kv.sm = shardctrler.MakeClerk(ctrlers)
 	kv.shards = make([]Shard, shardctrler.NShards)
+	//kv.askShard = make([]bool, shardctrler.NShards)
+	kv.shardStatus = make([]Status, shardctrler.NShards)
 	// 遍历切片并初始化每个元素的 map
 	for i := range kv.shards {
 		kv.shards[i].DataBase = make(map[string]string, 0)
 	}
 	go kv.CatchApplyOp()
 	go kv.CatchConfig()
+	go kv.CatchShards()
 	return kv
 }
 

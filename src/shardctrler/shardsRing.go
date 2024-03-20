@@ -1,6 +1,8 @@
 package shardctrler
 
 import (
+	"crypto/sha1"
+	"encoding/binary"
 	"fmt"
 	"hash/crc32"
 	"sort"
@@ -8,6 +10,17 @@ import (
 
 func hashFunc(key string) uint32 {
 	return crc32.ChecksumIEEE([]byte(key))
+}
+
+// sha1
+func hashFuncsha1(key string) uint32 {
+	hasher := sha1.New()
+	hasher.Write([]byte(key))
+	hashBytes := hasher.Sum(nil)
+	// 将前 4 字节转换为 uint32
+	// 注意：这里假设系统为大端序，如果是小端序的系统，使用 binary.LittleEndian
+	hashUint32 := binary.BigEndian.Uint32(hashBytes[0:4])
+	return hashUint32
 }
 
 // ring算法
@@ -32,7 +45,7 @@ func (sc *ShardCtrler) rebalanceShards() {
 	}
 }
 
-const VirtualNodes = 10 // 为每个组定义虚拟节点的数量
+const VirtualNodes = 5 // 为每个组定义虚拟节点的数量
 
 func (sc *ShardCtrler) updateRing() {
 	config := sc.configs[len(sc.configs)-1]
